@@ -27,6 +27,11 @@
                     <p class="text-xs text-slate-400">画像からオーダー・控え選手を抽出して指定JSON形式で出力</p>
                 </div>
             </div>
+            <!-- API Key Setting Button -->
+            <button id="openApiKeyModal" class="bg-slate-700 hover:bg-slate-600 text-slate-200 px-3 py-2 rounded-xl text-xs font-medium transition flex items-center gap-1.5 border border-slate-600">
+                <i class="fa-solid fa-key text-emerald-400"></i>
+                <span>APIキー設定</span>
+            </button>
         </div>
     </header>
 
@@ -187,7 +192,7 @@
 
             <!-- Text View -->
             <div id="textView" class="hidden space-y-2">
-                <label for="rawTextarea" class="block text-xs font-medium text-slate-400">指定フォーマット JSONプレビュー (1行・改行なし)</label>
+                <label for="rawTextarea" class="block text-xs font-medium text-slate-400">指定フォーマット JSONプレビュー (改行なし・1行)</label>
                 <textarea id="rawTextarea" rows="14" class="w-full bg-slate-900 border border-slate-700 rounded-xl p-3.5 text-slate-200 font-mono text-xs leading-relaxed focus:ring-2 focus:ring-emerald-500 focus:outline-none focus:border-transparent"></textarea>
             </div>
 
@@ -201,6 +206,32 @@
                     <i class="fa-solid fa-file-arrow-down"></i>
                     JSONテキスト保存 (.txt)
                 </button>
+            </div>
+        </div>
+
+        <!-- API Key Modal -->
+        <div id="apiKeyModal" class="fixed inset-0 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center z-50 p-4 hidden">
+            <div class="bg-slate-800 border border-slate-700 rounded-2xl max-w-md w-full p-6 space-y-4 shadow-2xl">
+                <div class="flex items-center justify-between border-b border-slate-700 pb-3">
+                    <h3 class="font-bold text-slate-200 flex items-center gap-2">
+                        <i class="fa-solid fa-key text-emerald-400"></i> Gemini APIキーの設定
+                    </h3>
+                    <button id="closeApiKeyModal" class="text-slate-400 hover:text-white">
+                        <i class="fa-solid fa-xmark text-lg"></i>
+                    </button>
+                </div>
+                <p class="text-xs text-slate-300 leading-relaxed">
+                    GitHub Pagesなどの外部環境でアプリを利用するには、お客様のGoogle Gemini APIキーが必要です。入力されたキーはブラウザのローカルストレージに安全に保存されます。
+                </p>
+                <div class="space-y-1">
+                    <label class="block text-xs font-medium text-slate-400">APIキー (AIza...)</label>
+                    <input type="password" id="apiKeyInput" class="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-200 focus:ring-2 focus:ring-emerald-500 focus:outline-none" placeholder="AIzaSy...">
+                </div>
+                <div class="flex justify-end gap-2 pt-2">
+                    <button id="saveApiKeyBtn" class="py-2 px-4 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-sm font-medium transition shadow-md">
+                        保存する
+                    </button>
+                </div>
             </div>
         </div>
 
@@ -239,22 +270,55 @@
         const teamNameInput = document.getElementById('teamNameInput');
         const teamDiInput = document.getElementById('teamDiInput');
 
+        // Modal Elements
+        const openApiKeyModal = document.getElementById('openApiKeyModal');
+        const closeApiKeyModal = document.getElementById('closeApiKeyModal');
+        const apiKeyModal = document.getElementById('apiKeyModal');
+        const apiKeyInput = document.getElementById('apiKeyInput');
+        const saveApiKeyBtn = document.getElementById('saveApiKeyBtn');
+
         let currentBase64Image = null;
         let currentMimeType = null;
         let parsedResultData = {
             teamName: "",
             teamDi: "",
+            captain: "",
             starters: [],
             substitutes: []
         };
 
         // Initialize Event Listeners
         window.addEventListener('DOMContentLoaded', () => {
+            // Load saved API key if any
+            const savedKey = localStorage.getItem('gemini_api_key');
+            if (savedKey) {
+                apiKeyInput.value = savedKey;
+            } else {
+                // Open modal automatically if key is missing on GitHub pages
+                apiKeyModal.classList.remove('hidden');
+            }
+
+            setupApiKeyModal();
             setupImageHandling();
             setupTabSwitching();
             setupActions();
             setupEditableUI();
         });
+
+        function setupApiKeyModal() {
+            openApiKeyModal.addEventListener('click', () => apiKeyModal.classList.remove('hidden'));
+            closeApiKeyModal.addEventListener('click', () => apiKeyModal.classList.add('hidden'));
+            saveApiKeyBtn.addEventListener('click', () => {
+                const key = apiKeyInput.value.trim();
+                if (key) {
+                    localStorage.setItem('gemini_api_key', key);
+                    apiKeyModal.classList.add('hidden');
+                    showToast('APIキーを保存しました');
+                } else {
+                    alert('有効なAPIキーを入力してください。');
+                }
+            });
+        }
 
         function setupImageHandling() {
             selectFileBtn.addEventListener('click', () => imageInput.click());
@@ -325,6 +389,13 @@
         }
 
         analyzeBtn.addEventListener('click', async () => {
+            const apiKey = localStorage.getItem('gemini_api_key') || apiKeyInput.value.trim();
+            if (!apiKey) {
+                apiKeyModal.classList.remove('hidden');
+                alert('Gemini APIキーを設定してください。');
+                return;
+            }
+
             if (!currentBase64Image) return;
 
             loadingStatus.classList.remove('hidden');
@@ -332,7 +403,7 @@
             analyzeBtn.disabled = true;
 
             try {
-                const responseData = await callGeminiVisionApi(currentBase64Image, currentMimeType);
+                const responseData = await callGeminiVisionApi(currentBase64Image, currentMimeType, apiKey);
                 parsedResultData = responseData;
                 if (!parsedResultData.starters) parsedResultData.starters = [];
                 if (!parsedResultData.substitutes) parsedResultData.substitutes = [];
@@ -349,14 +420,14 @@
             }
         });
 
-        async function callGeminiVisionApi(base64Data, mimeType) {
+        async function callGeminiVisionApi(base64Data, mimeType, apiKey) {
             const systemPrompt = `
 あなたは野球のオーダー表・メンバー表の画像を解析する専門のAIアシスタントです。
-画像からチーム名、スタメン選手（打順、守備、苗字、名前、背番号）、および控え選手を抽出してください。監督名やコーチ名は出力に含めないでください。
+画像からチーム名、キャプテン名（苗字#背番号形式の抽出元となるデータ）、スタメン選手（打順、守備、苗字、名前、背番号）、および控え選手を抽出してください。監督名やコーチ名は抽出不要です。
 
 選手名の分割ルール:
 - 選手名は苗字（lastName）と名前（firstName）に分ける。
-- 表示名（displayName）は基本的に苗字を設定する。苗字が複数存在する等の場合は識別できる文字列にする。
+- 表示名（displayName）は基本的に苗字を設定する。
 `;
 
             const userPrompt = "この野球メンバー表の画像を解析してチーム情報と選手（スタメン・控え）情報を抽出してください。";
@@ -386,6 +457,7 @@
                         properties: {
                             teamName: { type: "STRING", description: "チーム名" },
                             teamDi: { type: "STRING", description: "チーム略称（最大4文字）" },
+                            captain: { type: "STRING", description: "キャプテン情報（例: 田中#10、読み取れない場合は空文字）" },
                             starters: {
                                 type: "ARRAY",
                                 items: {
@@ -406,7 +478,6 @@
                                 items: {
                                     type: "OBJECT",
                                     properties: {
-                                        role: { type: "STRING", description: "区分・メモ（控え、補欠等）" },
                                         lastName: { type: "STRING", description: "苗字" },
                                         firstName: { type: "STRING", description: "名前" },
                                         displayName: { type: "STRING", description: "表示名" },
@@ -421,7 +492,6 @@
                 }
             };
 
-            const apiKey = "";
             const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${apiKey}`;
 
             let retries = 0;
@@ -436,7 +506,7 @@
                         body: JSON.stringify(payload)
                     });
 
-                    if (!res.ok) throw new Error(`HTTP Error: ${res.status}`);
+                    if (!res.ok) throw new Error(`HTTP Error: ${res.status} (APIキーを確認してください)`);
 
                     const jsonResult = await res.json();
                     const jsonText = jsonResult.candidates?.[0]?.content?.parts?.[0]?.text;
@@ -455,6 +525,7 @@
         function renderResults(data) {
             teamNameInput.value = data.teamName || "";
             teamDiInput.value = data.teamDi || (data.teamName ? data.teamName.slice(0, 4) : "");
+            parsedResultData.captain = data.captain || "";
 
             // Render Starters Table
             memberTableBody.innerHTML = '';
@@ -497,9 +568,7 @@
                     const row = document.createElement('tr');
                     row.className = 'hover:bg-slate-700/40 transition border-b border-slate-700/50';
                     row.innerHTML = `
-                        <td class="p-2 text-center">
-                            <input type="text" data-type="sub" data-index="${index}" data-field="role" value="${escapeHtml(sub.role || '控え')}" class="w-full bg-slate-900 border border-slate-700 rounded text-center text-xs py-1 focus:ring-1 focus:ring-emerald-500 focus:outline-none" placeholder="控え">
-                        </td>
+                        <td class="p-2 text-center text-xs text-slate-400">控え</td>
                         <td class="p-2">
                             <div class="grid grid-cols-2 gap-1">
                                 <input type="text" data-type="sub" data-index="${index}" data-field="lastName" value="${escapeHtml(sub.lastName || '')}" class="bg-slate-900 border border-slate-700 rounded px-2 text-xs py-1 focus:ring-1 focus:ring-emerald-500 focus:outline-none" placeholder="苗字 (la)">
@@ -525,7 +594,6 @@
         }
 
         function setupEditableUI() {
-            // Starter & Substitute Input listener
             const handleInput = (e) => {
                 const input = e.target;
                 const type = input.getAttribute('data-type');
@@ -550,7 +618,6 @@
             memberTableBody.addEventListener('input', handleInput);
             subTableBody.addEventListener('input', handleInput);
 
-            // Delete handlers
             const handleDelete = (e) => {
                 const btn = e.target.closest('[data-delete-type]');
                 if (btn) {
@@ -568,7 +635,6 @@
             memberTableBody.addEventListener('click', handleDelete);
             subTableBody.addEventListener('click', handleDelete);
 
-            // Team metadata inputs
             [teamNameInput, teamDiInput].forEach(el => {
                 el.addEventListener('input', () => {
                     parsedResultData.teamName = teamNameInput.value;
@@ -592,7 +658,6 @@
 
             document.getElementById('addSubBtn').addEventListener('click', () => {
                 parsedResultData.substitutes.push({
-                    role: '控え',
                     lastName: '選手',
                     firstName: '',
                     displayName: '選手',
@@ -627,7 +692,7 @@
                 });
             }
 
-            // 2. Add substitutes (控え選手: メモ "no" は空文字にする)
+            // 2. Add substitutes (控え選手: メモ "no" は空文字)
             if (parsedResultData.substitutes) {
                 parsedResultData.substitutes.forEach(s => {
                     dpArray.push({
@@ -641,15 +706,13 @@
                         ar: 0,
                         la: s.lastName || "",
                         po: 0,
-                        no: "", // 控えであってもメモ "no" は不要（空文字）
+                        no: "",
                         t2: "",
                         nu: s.number || ""
                     });
                 });
             }
 
-            let captainStr = "";
-            
             const tmObject = {
                 na: teamNameInput.value || parsedResultData.teamName || "",
                 no: "",
@@ -659,7 +722,7 @@
                 ma: "",
                 sc: "",
                 co: -16777053,
-                ca: captainStr,
+                ca: parsedResultData.captain || "",
                 di: teamDiInput.value || (teamNameInput.value ? teamNameInput.value.slice(0, 4) : ""),
                 op: 0,
                 le: ""
